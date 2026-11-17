@@ -8,3 +8,4 @@ results.csv
 figures/
 results/*.csv
 results/*.md
+results/old_r0/
