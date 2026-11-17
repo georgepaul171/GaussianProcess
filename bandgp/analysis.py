@@ -164,8 +164,10 @@ def matched_cost(agg):
         verdict = []
         for _, rv in v.iterrows():
             # band configuration that is at most as expensive (flops) as this Vecchia configuration
-            cheaper = b[b.flops <= rv.flops]
-            if len(cheaper):
+            cheaper = b[(b.flops <= rv.flops) & b.rel_err.notna()]
+            if pd.isna(rv.rel_err):
+                verdict.append(f"{rv.method}: no reference")
+            elif len(cheaper):
                 bb = cheaper.loc[cheaper.rel_err.idxmin()]
                 verdict.append(f"{rv.method}: band@≤flops {bb.method} err {bb.rel_err:.3f} vs {rv.rel_err:.3f}")
             else:
@@ -236,14 +238,22 @@ def fig_matched(sel):
         for fam in ["band", "vecchia_latent"]:
             col, mk, lab = FAMILY_STYLE[fam]
             gf = g[g.method.str.startswith("band" if fam == "band" else "vecchia_latent")].sort_values("flops")
+            gf = gf[gf.rel_err.notna()]
+            if gf.empty:
+                continue
             ax.plot(gf.flops, np.maximum(gf.rel_err, 1e-6), color=col, marker=mk, lw=2, ms=6, label=lab,
                     markeredgecolor="white")
             for _, r in gf.iterrows():
                 tag = f"c{r.method.split('_c')[-1]}" if fam == "band" else f"m{r.method.split('_m')[-1]}"
                 ax.annotate(tag, (r.flops, max(r.rel_err, 1e-6)), fontsize=6.5, color="#444",
                             xytext=(3, 3), textcoords="offset points")
-        ax.axhline(TOL_MEAN, color="#999", lw=0.8, ls="--")
-        ax.set_xscale("log"); ax.set_yscale("log")
+        if not ax.lines:
+            ax.text(0.5, 0.5, "no reference posterior\n(c=5 band infeasible)", ha="center", va="center",
+                    transform=ax.transAxes, fontsize=7, color="#666")
+            ax.set_xticks([]); ax.set_yticks([])
+        else:
+            ax.axhline(TOL_MEAN, color="#999", lw=0.8, ls="--")
+            ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_title(f"d={key[0]} {'SE' if key[1] == 'se' else 'M3/2'} β={key[2]:g} n={key[3]:.0e}", fontsize=8)
     for ax in axes.ravel()[len(cells):]:
         ax.axis("off")
