@@ -436,16 +436,28 @@ def vecchia_latent(ctx, res, m, nugget=1e-6):
         a = p0
         while a < N:
             bnd = min(N, int(math.ceil(a * 1.5)))
-            tp = cKDTree(Z[:a])
+            tb = cKDTree(Z[:bnd])                  # exact m nearest *predecessors*: query 3m nearest among
+            k3 = min(3 * m, bnd)                   # Z[:bnd] and keep those ordered before the point
             for s in range(a, bnd, 20000):
                 check_deadline()
                 e = min(bnd, s + 20000)
-                nb = tp.query(Z[s:e], k=m)[1].reshape(e - s, m)
+                cand = tb.query(Z[s:e], k=k3)[1].reshape(e - s, k3)
+                pi = np.arange(s, e)
+                pred = cand < pi[:, None]
+                ok = pred.sum(1) >= m
+                nb = np.empty((e - s, m), np.int64)
+                if ok.any():
+                    rank = np.cumsum(pred, 1)
+                    sel = pred & (rank <= m)
+                    nb[ok] = cand[ok][sel[ok]].reshape(-1, m)
+                for r in np.flatnonzero(~ok):      # rare: brute force over all predecessors
+                    p_ = s + r
+                    nb[r] = np.argsort(np.sum((Z[:p_] - Z[p_]) ** 2, 1))[:m]
+                res.info["nn_fallbacks"] = res.info.get("nn_fallbacks", 0) + int((~ok).sum())
                 b, _, dv = _cond(ctx, Z[s:e], Z[nb], nug)
                 if np.any(dv <= 0):
                     raise Invalid("non-positive conditional variance")
                 sd = 1 / np.sqrt(dv)
-                pi = np.arange(s, e)
                 rows.append(np.repeat(pi, m + 1)); cols.append(np.c_[pi, nb].ravel())
                 vals.append(np.c_[sd, -b * sd[:, None]].ravel())
             a = bnd

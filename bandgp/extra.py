@@ -87,6 +87,24 @@ def do_nnpred():
                                for m in (50, 100)], cap=C.time_cap(n))
 
 
+def do_latent(part):
+    """Recompute latent Vecchia (m = 10, 30) for every job after the exact-predecessor fix.
+    part: 'd1small' (d=1, n<=1e5), 'd1big' (d=1, n=1e6), 'd2' (d=2 except beta=1, n=1e5), 'd2b1' (the rest)."""
+    from .methods import vecchia_latent as vl
+    for d in (1, 2):
+        for n in C.NS[d]:
+            for k in C.KERNELS:
+                for b in C.BETAS:
+                    key = ("d1small" if n <= 100_000 else "d1big") if d == 1 else \
+                          ("d2b1" if (b == 1.0 and n == 100_000) else "d2")
+                    if key != part:
+                        continue
+                    for r in range(C.reps(n)):
+                        supplement(dict(d=d, kernel=k, beta=b, n=n, rep=r),
+                                   [("vecchia_latent", f"vecchia_latent_m{m}", {"m": m}, vl, {"m": m})
+                                    for m in C.VECCHIA_MS], cap=C.time_cap(n))
+
+
 def do_plateau():
     C.NNZ_CAP = 1e9
     out = []
@@ -121,5 +139,7 @@ def do_plateau():
     pd.DataFrame(out).to_csv(os.path.join(ROOT, "results", "diag_vecchia_plateau.csv"), index=False)
 
 
-def main(what):
+def main(what, part=None):
+    if what == "latent":
+        return do_latent(part)
     {"refs": do_refs, "metis": do_metis, "nnpred": do_nnpred, "plateau": do_plateau}[what]()
