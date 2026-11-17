@@ -1,6 +1,6 @@
 """Single entry point.
 
-  python -m bandgp run      [--max-n N] [--slots 4] [--mem-per-slot-gb 3.5] [--filter key=val ...]
+  python -m bandgp run      [--slots 4] [--mem-per-slot-gb 3.5] [--filter key=val ...]
   python -m bandgp analyse  # results.csv, figures/, summary tables
   python -m bandgp job '<json>'   (internal: one job in this process)
 """
@@ -16,15 +16,17 @@ import sys
 import time
 
 
-def all_jobs(max_n):
+def all_jobs():
+    """Rep-0 jobs first (they fix c* for later reps), small n first."""
     from . import config as C
     jobs = []
-    for n in C.NS:
-        if n > max_n:
-            continue
-        for rep in range(C.reps(n)):
-            for d, kernel, lsmode, alpha, beta in itertools.product(C.DS, C.KERNELS, C.LSMODES, C.ALPHAS, C.BETAS):
-                jobs.append(dict(d=d, kernel=kernel, lsmode=lsmode, alpha=alpha, beta=beta, n=n, rep=rep))
+    for rep_phase in (0, 1):
+        for d in (1, 2):
+            for n in C.NS[d]:
+                for kernel in C.KERNELS:
+                    for beta in C.BETAS:
+                        reps = [0] if rep_phase == 0 else list(range(1, C.reps(n)))
+                        jobs += [dict(d=d, kernel=kernel, beta=beta, n=n, rep=r) for r in reps]
     return jobs
 
 
@@ -34,7 +36,7 @@ def slots_for(n):
 
 def run(args):
     from .runner import job_id, RAW
-    jobs = all_jobs(args.max_n)
+    jobs = all_jobs()
     for f in args.filter or []:
         k, v = f.split("=")
         jobs = [j for j in jobs if str(j[k]) == v]
@@ -44,6 +46,8 @@ def run(args):
     running = []; free = args.slots; t0 = time.time(); ndone = 0
     while jobs or running:
         while jobs and slots_for(jobs[0]["n"]) <= free:
+            if jobs[0]["rep"] > 0 and any(r["rep"] == 0 for _, r, _, _ in running):
+                break                                   # later reps need rep-0 c*
             j = jobs.pop(0); s = slots_for(j["n"])
             log = open(os.path.join(RAW, "..", "logs", job_id(j) + ".log"), "w")
             mem = int(args.mem_per_slot_gb * s * 2 ** 30)
@@ -64,7 +68,19 @@ def run(args):
                       f"done={ndone} left={len(jobs)}", flush=True)
 
 
+def set_ftz_daz():
+    """Flush subnormals to zero (MXCSR FTZ|DAZ). Far-apart kernel entries otherwise create subnormal floats that
+    slow dense LAPACK/BLAS by ~35x on this CPU; values below 1e-308 are numerically irrelevant here."""
+    import ctypes, subprocess
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_ftz")
+    so = os.path.join(d, "libftz.so")
+    if not os.path.exists(so):
+        subprocess.run(["gcc", "-O2", "-shared", "-fPIC", "-o", so, os.path.join(d, "ftz.c")], check=True)
+    ctypes.CDLL(so).set_ftz_daz()
+
+
 def job(args):
+    set_ftz_daz()
     if args.mem:
         resource.setrlimit(resource.RLIMIT_AS, (args.mem, args.mem))
     from .runner import run_job
@@ -75,7 +91,7 @@ def job(args):
 def main():
     ap = argparse.ArgumentParser(prog="bandgp")
     sp = ap.add_subparsers(dest="cmd", required=True)
-    r = sp.add_parser("run"); r.add_argument("--max-n", type=int, default=10 ** 7); r.add_argument("--slots", type=int, default=4)
+    r = sp.add_parser("run"); r.add_argument("--slots", type=int, default=4)
     r.add_argument("--mem-per-slot-gb", type=float, default=3.5); r.add_argument("--filter", nargs="*")
     jb = sp.add_parser("job"); jb.add_argument("spec"); jb.add_argument("--mem", type=int, default=0)
     sp.add_parser("analyse")

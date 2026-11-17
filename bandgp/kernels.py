@@ -71,7 +71,9 @@ def dense_block(kernel, A, B, ell):
     for k in range(A.shape[1]):
         diff = A[:, k:k + 1] - B[None, :, k]
         r2 += diff * diff
-    return kfun_sq(kernel, r2, ell)
+    K = kfun_sq(kernel, r2, ell)
+    K[K < 1e-30] = 0.0          # avoid subnormal floats (they slow BLAS/LAPACK ~100x); numerically irrelevant
+    return K
 
 
 class DenseKernelOp:

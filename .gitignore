@@ -2,3 +2,4 @@ results/raw/
 results/logs/
 __pycache__/
 *.pyc
+bandgp/_ftz/*.so

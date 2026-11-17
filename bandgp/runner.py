@@ -1,4 +1,4 @@
-"""Executes one job = (d, kernel, lsmode, alpha, beta, n, rep): all methods, metrics, JSONL output."""
+"""Executes one job = (d, kernel, beta, n, rep): all methods, metrics, JSONL output (results/raw)."""
 import json
 import os
 import threading
@@ -11,21 +11,20 @@ import psutil
 from . import config as C
 from .data import make_data
 from .methods import Ctx, Result, Skip, Invalid, Timeout, method_list, _STATE
-from . import diagnostics
 
-RAW = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results", "raw")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAW = os.path.join(ROOT, "results", "raw")
+USES_XCOV = {"exact", "band", "pcg"}
 
 
 def job_id(j):
-    return "d{d}_{kernel}_{lsmode}_a{alpha}_b{beta}_n{n}_r{rep}".format(**j)
+    return "d{d}_{kernel}_b{beta}_n{n}_r{rep}".format(**j)
 
 
 class PeakRSS:
-    def __init__(self):
-        self.p = psutil.Process(); self.peak = 0; self._stop = False
-
+    """Peak resident memory above the pre-method baseline, sampled every 5 ms."""
     def __enter__(self):
-        self.base = self.p.memory_info().rss; self.peak = self.base
+        self.p = psutil.Process(); self.base = self.p.memory_info().rss; self.peak = self.base; self._stop = False
         self.th = threading.Thread(target=self._run, daemon=True); self.th.start(); return self
 
     def _run(self):
@@ -33,11 +32,23 @@ class PeakRSS:
             self.peak = max(self.peak, self.p.memory_info().rss); time.sleep(0.005)
 
     def __exit__(self, *a):
-        self._stop = True; self.th.join(); self.peak = max(self.peak, self.p.memory_info().rss)
+        self._stop = True; self.th.join()
 
     @property
     def mb(self):
         return (self.peak - self.base) / 2 ** 20
+
+
+def band_radii(j):
+    """Rep 0: full sweep. Later reps: c* (smallest c valid on rep 0) and the next value up."""
+    if j["rep"] == 0:
+        return list(C.CS)
+    p = os.path.join(RAW, job_id(dict(j, rep=0)) + ".jsonl")
+    ok = sorted(r["c"] for r in map(json.loads, open(p)) if r["family"] == "band" and r["status"] == "ok")
+    if not ok:
+        return []
+    i = C.CS.index(ok[0])
+    return C.CS[i:i + 2]
 
 
 def run_job(j):
@@ -47,104 +58,78 @@ def run_job(j):
     if os.path.exists(out_path):
         return
     crashed = set()
-    if os.path.exists(prog):                       # previous attempt died (e.g. killed): blame the unfinished method
+    if os.path.exists(prog):                      # previous attempt killed: blame the unfinished method
         started, done = [], set()
         for line in open(prog):
             k, nm = line.split(); (started.append(nm) if k == "start" else done.add(nm))
         crashed = {nm for nm in started if nm not in done}
     pf = open(prog, "a")
 
-    d, n = j["d"], j["n"]
+    d, n, beta = j["d"], j["n"], j["beta"]
     t0 = time.perf_counter()
-    data = make_data(d, j["alpha"], j["beta"], n, j["rep"])
+    data = make_data(d, C.ALPHA, beta, n, j["rep"])
     t_data = time.perf_counter() - t0
-    rho = C.density(n, d, j["beta"])
-    ell = C.lengthscale(j["lsmode"], n, d, j["beta"], j["alpha"])
-    ctx = Ctx(data, j["kernel"], ell, d, n, rho, j["rep"])
-    base = dict(j, L=data["L"], rho=rho, ell=ell, rho_ell_d=rho * ell ** d, R_ex=ctx.R_ex, t_data=t_data)
+    rho = C.density(n, d, beta); ell = C.lengthscale(n, d, beta)
+    ctx = Ctx(data, j["kernel"], ell, d, n, rho)
+    cap = C.time_cap(n)
+    base = dict(j, alpha=C.ALPHA, L=data["L"], rho=rho, ell=ell, pts_per_ell=rho * ell ** d, R_ex=ctx.R_ex,
+                t_data=t_data, time_cap=cap)
+    radii = band_radii(j)
 
     rows, preds = [], {}
-    for family, name, params, fn, kw in method_list(d):
+    for family, name, params, fn, kw in method_list(d, radii):
         row = dict(base, family=family, method=name, **params)
         if name in crashed:
-            row.update(status="oom_killed", valid=False, reason="process killed during this method")
-            rows.append(row); continue
+            row.update(status="oom", reason="process killed (memory) during this method"); rows.append(row); continue
         pf.write(f"start {name}\n"); pf.flush()
         res = Result()
-        _STATE["deadline"] = time.perf_counter() + C.TIME_CAP
+        _STATE.update(deadline=time.perf_counter() + cap, cap=cap)
+        pm = None
         try:
             with PeakRSS() as pm:
                 fn(ctx, res, **kw)
             status, reason = "ok", ""
         except Skip as e:
-            status, reason = "skip", str(e)
+            status, reason = "infeasible", str(e)
         except Invalid as e:
             status, reason = "invalid", str(e)
         except Timeout as e:
             status, reason = "timeout", str(e)
-        except MemoryError as e:
+        except MemoryError:
             status, reason = "oom", "MemoryError"
         except Exception as e:
             nm = type(e).__name__
-            status = "oom" if "Memory" in nm or "memory" in str(e).lower() else "error"
+            status = "oom" if "memory" in (nm + str(e)).lower() else "error"
             reason = f"{nm}: {e}"[:300]
             if status == "error":
                 traceback.print_exc()
+        _STATE.update(deadline=None)
         pf.write(f"done {name}\n"); pf.flush()
         row.update(status=status, reason=reason, **{f"info_{k}": v for k, v in res.info.items()})
-        if status != "skip":
-            row["peak_mem_mb"] = pm.mb if status == "ok" else np.nan
         if status == "ok":
-            uses_xc = family not in ("sgpr", "vecchia_pred")
-            t_xc = ctx.t_xcov if (uses_xc and hasattr(ctx, "t_xcov")) else 0.0
-            t_fit = res.t["fit"] + (ctx.t_tree if family not in ("exact",) else 0.0)
-            t_mean = res.t["mean"] + t_xc
-            row.update(t_fit=t_fit, t_mean=t_mean, t_var=res.t["var"], var_extrapolated=res.var_extrapolated,
-                       t_meanonly=t_fit + t_mean)
+            t_fit = res.t["fit"] + (ctx.t_tree if family != "exact" else 0.0)
+            t_mean = res.t["mean"] + (ctx.t_xcov if family in USES_XCOV else 0.0)
+            row.update(t_xcov=ctx.t_xcov if family in USES_XCOV else 0.0, t_fit=t_fit, t_mean=t_mean, t_var=res.t["var"], t_total=t_fit + t_mean + res.t["var"],
+                       flops=res.flops, nnz_used=res.info.get("nnz_used"), peak_mem_mb=pm.mb)
             preds[name] = res
         rows.append(row)
-        if family == "infl_exact":
-            ctx.band_cache = {}   # free memory after last use of this radius
 
-    # ---------------------------------------------------------------- reference and metrics
     ft, fv = data["ft"], data["fv"]
-    ref_name = next((nm for nm in ["exact", "pcg_r1000", "pcg_r200", "pcg_r50"] if nm in preds), None)
-    ref = preds.get(ref_name)
-    ref_mt = ref.mt if ref else None
-    ref_vsub = (ref.vt[ctx.sub] if ref.vt is not None else ref.vsub) if ref else None
-    ref_vt = ref.vt if (ref is not None and ref.vt is not None) else None
+    ref = preds.get("exact")
     for row in rows:
-        row["ref"] = ref_name
         r = preds.get(row["method"])
         if r is None:
-            row["valid"] = False; continue
+            continue
         row["rmse_f0"] = float(np.sqrt(np.mean((r.mt - ft) ** 2)))
         row["rmse_val"] = float(np.sqrt(np.mean((r.mv - fv) ** 2)))
-        if ref_mt is not None:
-            row["rmse_ref"] = float(np.sqrt(np.mean((r.mt - ref_mt) ** 2)))
-        v = r.vt if r.vt is not None else r.vsub
-        if v is None:
-            row["valid"] = True; continue
-        fsel = ft if r.vt is not None else ft[ctx.sub]
-        msel = r.mt if r.vt is not None else r.mt[ctx.sub]
+        v = r.vsub; fs = ft[ctx.sub]; ms = r.mt[ctx.sub]
         row["frac_negvar"] = float(np.mean(v < 0))
-        row["cover"] = float(np.mean(np.abs(fsel - msel) <= 1.96 * np.sqrt(np.clip(v, 0, None))))
-        row["cover_npts"] = int(len(v))
-        if ref_vt is not None and r.vt is not None:
-            row["var_ratio"] = float(np.mean(r.vt / ref_vt)); row["var_ratio_min"] = float(np.min(r.vt / ref_vt))
-        elif ref_vsub is not None:
-            vs = r.vt[ctx.sub] if r.vt is not None else r.vsub
-            row["var_ratio"] = float(np.mean(vs / ref_vsub)); row["var_ratio_min"] = float(np.min(vs / ref_vsub))
-        row["valid"] = bool(row["frac_negvar"] == 0)
-    # ---------------------------------------------------------------- scale diagnostics (rep 0 only)
-    _STATE["deadline"] = None
-    if j["rep"] == 0:
-        drow = dict(base, family="diag", method="diag", status="ok")
-        try:
-            drow.update(diagnostics.analytic(ctx)); drow.update(diagnostics.rank_needed(ctx))
-        except Exception as e:
-            drow.update(status="error", reason=str(e)[:300])
-        rows.append(drow)
+        row["cover"] = float(np.mean(np.abs(fs - ms) <= 1.96 * np.sqrt(np.clip(v, 0, None))))
+        if ref is not None:
+            row["rmse_to_exact"] = float(np.sqrt(np.mean((r.mt - ref.mt) ** 2)))
+            row["var_ratio"] = float(np.mean(v / ref.vsub)); row["var_ratio_min"] = float(np.min(v / ref.vsub))
+        if row["frac_negvar"] > 0:
+            row["status"] = "invalid"; row["reason"] = "negative predictive variances"
     tmp = out_path + ".tmp"
     with open(tmp, "w") as fh:
         for row in rows:
