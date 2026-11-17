@@ -91,14 +91,24 @@ def ssgp(X, y, Xt, m, ell0, s2_0, noise0, seed=0, maxiter=500, restarts=10):
     n, d = X.shape
     rng = np.random.default_rng(seed)
     best = None
+    bounds = [(None, None)] * (m * d) + [(np.log(1e-3), np.log(1e4)), (np.log(1e-4), np.log(10.0))]
+    n_fail = 0
     for _ in range(restarts):
         W0 = rng.standard_normal((m, d)) / ell0
         th0 = np.concatenate([W0.ravel(), [np.log(s2_0), np.log(noise0)]])
-        r = minimize(_ssgp_nlml, th0, args=(X, y, m), jac=True, method="L-BFGS-B", options=dict(maxiter=maxiter))
+        try:
+            r = minimize(_ssgp_nlml, th0, args=(X, y, m), jac=True, method="L-BFGS-B", bounds=bounds,
+                         options=dict(maxiter=maxiter))
+        except np.linalg.LinAlgError:          # numerically non-PD system along the path: count as a failed restart
+            n_fail += 1
+            continue
         if best is None or r.fun < best.fun:
             best = r
+    if best is None:
+        raise RuntimeError("all SSGP restarts failed")
     res = best
     th = res.x
     W = th[:m * d].reshape(m, d); s2, nz = np.exp(th[m * d:])
     mu, sd = blr_posterior(rff(X, W), y, s2 / m, nz, rff(Xt, W))
-    return mu, sd, dict(t=time.perf_counter() - t0, nit=res.nit, success=bool(res.success), noise=float(nz))
+    return mu, sd, dict(t=time.perf_counter() - t0, nit=res.nit, success=bool(res.success), noise=float(nz),
+                        failed_restarts=n_fail)

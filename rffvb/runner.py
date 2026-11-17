@@ -141,8 +141,14 @@ def run_job(j):
 
         # SSGP with as many features as individual VB selected (m = ceil(k/2) frequencies, >= 1)
         m_freq = max(1, math.ceil(k_ind / 2))
-        m_, s_, inf = ssgp(X, y, Xt, m_freq, ell, s2, nz, seed=rep)
-        rows.append(dict(bp, design="optimised", method="ssgp", n_selected=2 * m_freq, runtime=inf["t"], ssgp_success=inf["success"],
+        try:
+            m_, s_, inf = ssgp(X, y, Xt, m_freq, ell, s2, nz, seed=rep)
+        except Exception as e:
+            rows.append(dict(bp, design="optimised", method="ssgp", n_selected=2 * m_freq,
+                             status=f"{type(e).__name__}: {e}"[:200]))
+            print(f"{jid} p={p} ssgp failed", flush=True)
+            continue
+        rows.append(dict(bp, design="optimised", method="ssgp", n_selected=2 * m_freq, runtime=inf["t"], ssgp_success=inf["success"], ssgp_failed_restarts=inf["failed_restarts"],
                          **metrics(f_te, m_, *gauss_band(m_, s_))))
         print(f"{jid} p={p} done", flush=True)
     with open(out + ".tmp", "w") as fh:
