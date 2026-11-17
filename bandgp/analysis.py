@@ -23,6 +23,8 @@ from . import config as C
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOL_MEAN, TOL_VAR = 0.05, 0.10
 KEYS = ["d", "kernel", "beta", "n"]
+JOINT = ["exact", "band", "vecchia_latent", "sgpr", "pcg"]       # return a joint (multivariate) posterior
+POINTWISE = JOINT + ["vecchia_pred"]                               # any method usable for pointwise prediction
 FAMILY_STYLE = {   # fixed categorical order (validated palette) + distinct marker per family
     "band": ("#2a78d6", "o", "hard banding"),
     "sgpr": ("#eb6834", "s", "SGPR / Nyström"),
@@ -117,8 +119,9 @@ def band_threshold(df):
     return pd.DataFrame(out)
 
 
-def winners(agg, df, col="eligible"):
+def winners(agg, df, col="eligible", families=POINTWISE):
     out = []
+    agg = agg[agg.family.isin(families)]
     for key, g in agg.groupby(KEYS):
         cell = df[(df.d == key[0]) & (df.kernel == key[1]) & (df.beta == key[2]) & (df.n == key[3])]
         e = g[g[col]]
@@ -311,7 +314,15 @@ def fig_frontiers(agg):
 
 def threshold_sensitivity(df):
     out = []
-    ws = {t: winners(config_table(df, t), df) for t in (0.03, 0.05, 0.10)}
+    out_all = []
+    for use, fams in (("joint", JOINT), ("pointwise", POINTWISE)):
+        out_all += _sens(df, use, fams)
+    return pd.DataFrame(out_all)
+
+
+def _sens(df, use, fams):
+    out = []
+    ws = {t: winners(config_table(df, t), df, families=fams) for t in (0.03, 0.05, 0.10)}
     base = ws[0.05].set_index(KEYS)
     for t in (0.03, 0.10):
         w = ws[t].set_index(KEYS)
@@ -319,8 +330,8 @@ def threshold_sensitivity(df):
             a, b = base.loc[k, "winner_time"], w.loc[k, "winner_time"]
             fam = lambda s: s.rsplit("_", 1)[0] if s.startswith(("band", "sgpr", "vecchia", "pcg")) else s
             if a != b:
-                out.append(dict(zip(KEYS, k), tol=t, winner_at_5pct=a, winner=b, family_flip=fam(a) != fam(b)))
-    return pd.DataFrame(out)
+                out.append(dict(zip(KEYS, k), use=use, tol=t, winner_at_5pct=a, winner=b, family_flip=fam(a) != fam(b)))
+    return out
 
 
 def main():
@@ -330,19 +341,21 @@ def main():
     rc = ref_check(df); rc.to_csv(os.path.join(ROOT, "results", "ref_check.csv"), index=False)
     agg = config_table(df); agg.to_csv(os.path.join(ROOT, "results", "summary_by_config.csv"), index=False)
     th = band_threshold(df); th.to_csv(os.path.join(ROOT, "results", "band_threshold.csv"), index=False)
-    w = winners(agg, df); w.to_csv(os.path.join(ROOT, "results", "winners.csv"), index=False)
+    w = winners(agg, df); w.to_csv(os.path.join(ROOT, "results", "winners_pointwise.csv"), index=False)
+    wj = winners(agg, df, families=JOINT); wj.to_csv(os.path.join(ROOT, "results", "winners_joint.csv"), index=False)
     w2 = winners(agg, df, "eligible_f0rule"); w2.to_csv(os.path.join(ROOT, "results", "winners_f0rule.csv"), index=False)
     sel, verdict = matched_cost(agg)
     sel.to_csv(os.path.join(ROOT, "results", "band_vs_vecchia.csv"), index=False)
     verdict.to_csv(os.path.join(ROOT, "results", "band_vs_vecchia_verdict.csv"), index=False)
     with open(os.path.join(ROOT, "results", "winners.md"), "w") as fh:
-        fh.write(md_winners(w, th) + "\n")
+        fh.write("## Full posterior (joint-posterior methods only)\n" + md_winners(wj, th) +
+                 "\n\n## Pointwise prediction (all methods incl. NN-Vecchia prediction)\n" + md_winners(w, th) + "\n")
     figs = fig_winners(agg) + [fig_matched(sel)] + fig_frontiers(agg)
     ts = threshold_sensitivity(df); ts.to_csv(os.path.join(ROOT, "results", "threshold_sensitivity.csv"), index=False)
     print("\nthreshold sensitivity (winner by wall-clock differs from the 5% rule):\n", ts.to_string())
     pd.set_option("display.width", 250); pd.set_option("display.max_colwidth", 200); pd.set_option("display.max_rows", 500)
     print("REFERENCE CHECK (band c=5 vs exact, n=1e4):\n", rc.to_string())
-    print(md_winners(w, th))
+    print("FULL POSTERIOR"); print(md_winners(wj, th)); print("POINTWISE"); print(md_winners(w, th))
     print("\nf0-rule winners:\n", w2[KEYS + ["winner_time", "winner_flops"]].to_string())
     print("\nband thresholds:\n", th.to_string())
     print("\nmatched cost:\n", verdict.to_string())
