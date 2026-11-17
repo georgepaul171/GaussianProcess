@@ -2,3 +2,4 @@ results/raw/
 __pycache__/
 *.pyc
 results_run.log
+claim3_run.log

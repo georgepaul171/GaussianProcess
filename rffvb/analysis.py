@@ -154,6 +154,66 @@ def fig_claim3(c3):
     return p
 
 
+def claim3_exact():
+    """Aggregate the MCMC subset (rffvb.claim3_mcmc): mixed replicates only, dropped ones counted."""
+    fs = sorted(glob.glob(os.path.join(ROOT, "results", "claim3_mcmc", "*.json")))
+    if not fs:
+        return None, None
+    df = pd.DataFrame([json.load(open(f)) for f in fs])
+    df.to_csv(os.path.join(ROOT, "results", "claim3_mcmc.csv"), index=False)
+    mix = df.groupby(["d", "truth", "design"]).agg(reps=("rep", "count"), mixed=("mixed", "sum"),
+                                                   rhat_max=("rhat_model_size", "max"),
+                                                   pip_gap_max=("max_pip_gap", "max")).reset_index()
+    k = df[df.mixed & df.coef_cov_obs.notna()]
+    agg = {c: (c, "mean") for c in [
+        "vb_selected", "vif_median", "ratio_fixed_over_vif_median", "spearman_ratio_vif", "ratio_full_over_q_median",
+        "coef_cov_obs", "coef_cov_fixed_centred", "coef_cov_full_centred", "coef_pred_vif",
+        "fun_cov_obs", "fun_cov_fixed_centred", "fun_cov_full_centred", "fun_pred_vif", "fun_R_median",
+        "fun_var_ratio_exact_fixed_over_diag", "frac_post_corr_negative", "frac_opposite_sign_xcorr_gt_0p9",
+        "median_post_corr_xcorr_gt_0p9", "n_pairs_xcorr_gt_0p9", "mean_abs_gamma_minus_pip",
+        "mm_cov_gp_by_exact_ss", "mm_cov_f0_exact_ss", "mm_cov_f0_gp", "mm_rmse_exact_ss_vs_gp_mean",
+        "mm_rmse_f0_exact_ss", "mm_rmse_f0_gp"] if c in k}
+    g = k.groupby(["d", "truth", "design"]).agg(n=("rep", "count"), **agg).reset_index()
+    for lvl in ("coef", "fun"):
+        g[f"{lvl}_part_fixed_vif"] = 0.95 - g[f"{lvl}_cov_fixed_centred"]
+        g[f"{lvl}_part_inclusion"] = g[f"{lvl}_cov_fixed_centred"] - g[f"{lvl}_cov_full_centred"]
+        g[f"{lvl}_part_mean_offset"] = g[f"{lvl}_cov_full_centred"] - g[f"{lvl}_cov_obs"]
+    g = mix.merge(g, on=["d", "truth", "design"], how="left")
+    g.to_csv(os.path.join(ROOT, "results", "claim3_exact_summary.csv"), index=False)
+    return df, g
+
+
+def fig_claim3_exact(g):
+    plt = _plt()
+    g = g[g.n.notna() & (g.n > 0)].copy()
+    if g.empty:
+        return None
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
+    lab = [f"d{r.d} {'sparse' if r.truth == 'sparse' else 'Matérn'}\n{r.design}" for r in g.itertuples()]
+    x = np.arange(len(g))
+    parts = [("part_fixed_vif", "#2a78d6", "fixed-support (VIF) part"),
+             ("part_inclusion", "#eb6834", "inclusion part"),
+             ("part_mean_offset", "#1baf7a", "mean-offset part")]
+    for ax, lvl, title in zip(axes, ("coef", "fun"), ("coefficients (VB-selected support)", "function values (test grid)")):
+        pos = np.zeros(len(g)); neg = np.zeros(len(g))
+        for key, col, name in parts:
+            v = g[f"{lvl}_{key}"].values
+            base = np.where(v >= 0, pos, neg)
+            ax.bar(x, v, bottom=base, color=col, width=0.7, edgecolor="white", linewidth=0.6, label=name)
+            pos += np.where(v >= 0, v, 0); neg += np.where(v < 0, v, 0)
+        ax.scatter(x, 0.95 - g[f"{lvl}_cov_obs"], color="#222", marker="_", s=200, zorder=5,
+                   label="total undercoverage 0.95 − observed")
+        ax.axhline(0, color="#888", lw=0.8)
+        ax.set_xticks(x); ax.set_xticklabels(lab, fontsize=7)
+        ax.set_title(f"{title}, vs exact spike-and-slab", fontsize=9)
+    axes[0].set_ylabel("coverage shortfall (0.95 − coverage), split")
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=4, frameon=False, fontsize=8)
+    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    p = os.path.join(ROOT, "figures", "claim3_exact_decomposition.png"); fig.savefig(p, dpi=160); plt.close(fig)
+    return p
+
+
 def main():
     os.makedirs(os.path.join(ROOT, "figures"), exist_ok=True)
     df = load()
@@ -169,3 +229,7 @@ def main():
     c3.to_csv(os.path.join(ROOT, "results", "claim3.csv"), index=False)
     print(c3.to_string(index=False, float_format=lambda x: f"{x:.3g}"))
     print(fig_claim3(c3))
+    _, g = claim3_exact()
+    if g is not None:
+        print(g.to_string(index=False, float_format=lambda x: f"{x:.3g}"))
+        print(fig_claim3_exact(g))
