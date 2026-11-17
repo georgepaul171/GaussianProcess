@@ -1,0 +1,8 @@
+d,kernel,beta,n,use,tol,winner_at_5pct,winner,family_flip
+1,se,1.0,100000,joint,0.1,band_c2.5,band_c2.0,False
+1,se,1.0,10000,pointwise,0.1,band_c2.5,vecchia_pred_m30,True
+1,se,1.0,100000,pointwise,0.1,vecchia_pred_m50,vecchia_pred_m30,False
+1,se,1.0,1000000,pointwise,0.1,vecchia_pred_m50,vecchia_pred_m30,False
+2,m32,1.0,10000,pointwise,0.1,vecchia_latent_m30,vecchia_pred_m30,True
+2,m32,1.0,100000,pointwise,0.1,vecchia_latent_m30,vecchia_pred_m30,True
+2,se,1.0,100000,pointwise,0.1,band_c2.5_metis,vecchia_pred_m100,True

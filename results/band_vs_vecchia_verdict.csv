@@ -1,0 +1,20 @@
+d,kernel,beta,n,verdict
+1,se,0.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+1,se,0.0,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+1,se,0.5,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+1,se,0.5,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+1,se,1.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: band@≤flops band_c4.0 err 0.000 vs 0.002
+1,se,1.0,100000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: band@≤flops band_c4.0 err 0.000 vs 0.002
+1,se,1.0,1000000,vecchia_latent_m30: band@≤flops band_c4.0 err 0.000 vs 0.002
+2,m32,0.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,m32,0.0,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+2,m32,0.5,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,m32,0.5,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+2,m32,1.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,m32,1.0,100000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,se,0.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,se,0.0,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+2,se,0.5,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: no band config this cheap
+2,se,0.5,100000,vecchia_latent_m10: no reference; vecchia_latent_m30: no reference
+2,se,1.0,10000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: band@≤flops band_c2.5 err 0.011 vs 0.091
+2,se,1.0,100000,vecchia_latent_m10: no band config this cheap; vecchia_latent_m30: band@≤flops band_c2.5 err 0.011 vs 0.096

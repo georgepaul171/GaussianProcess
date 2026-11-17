@@ -177,7 +177,8 @@ def matched_cost(agg):
             else:
                 verdict.append(f"{rv.method}: no band config this cheap")
         out.append(dict(zip(KEYS, key), verdict="; ".join(verdict)))
-    return sel[KEYS + ["method", "reps_ok", "flops", "t_total", "rel_err", "var_ratio", "nnz_row"]], pd.DataFrame(out)
+    return sel[KEYS + ["method", "reps_ok", "flops", "nnz_used", "peak_mem_mb", "t_total", "rel_err", "var_ratio",
+                       "nnz_row"]], pd.DataFrame(out)
 
 
 def _style():
