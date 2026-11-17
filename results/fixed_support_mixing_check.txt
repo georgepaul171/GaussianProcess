@@ -1,0 +1,7 @@
+Fixed-support exact posterior (svb.mcmc.run_fixed_support), two independent chains (seeds 1, 2), rep 0, p = 500,
+2000 burn-in, 10000 kept. Max split R-hat over coefficients on S and over f(x) at 200 test points; chain-1/chain-2
+marginal variance ratio (median) and max |log ratio|.
+d=1 sparse   iid      |S|=12  max coef Rhat 1.000  max fun Rhat 1.000  var ratio median 0.979  max|log| 0.055
+d=1 matern52 lattice  |S|=8   max coef Rhat 1.000  max fun Rhat 1.000  var ratio median 0.975  max|log| 0.029
+d=2 sparse   iid      |S|=31  max coef Rhat 1.000  max fun Rhat 1.000  var ratio median 1.007  max|log| 0.080
+d=2 matern52 lattice  |S|=20  max coef Rhat 1.000  max fun Rhat 1.000  var ratio median 0.995  max|log| 0.042

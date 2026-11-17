@@ -1,0 +1,9 @@
+d,truth,design,reps,mixed,rhat_max,pip_gap_max,n,vb_selected,vif_median,ratio_fixed_over_vif_median,spearman_ratio_vif,ratio_full_over_q_median,coef_cov_obs,coef_cov_fixed_centred,coef_cov_full_centred,coef_pred_vif,fun_cov_obs,fun_cov_fixed_centred,fun_cov_full_centred,fun_pred_vif,fun_R_median,fun_var_ratio_exact_fixed_over_diag,frac_post_corr_negative,frac_opposite_sign_xcorr_gt_0p9,median_post_corr_xcorr_gt_0p9,n_pairs_xcorr_gt_0p9,mean_abs_gamma_minus_pip,mm_cov_gp_by_exact_ss,mm_cov_f0_exact_ss,mm_cov_f0_gp,mm_rmse_exact_ss_vs_gp_mean,mm_rmse_f0_exact_ss,mm_rmse_f0_gp,coef_part_fixed_vif,coef_part_inclusion,coef_part_mean_offset,fun_part_fixed_vif,fun_part_inclusion,fun_part_mean_offset
+1,matern52,iid,3,0,1.5630325084548045,0.9998488175874174,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+1,matern52,lattice,3,0,2.2695921679447313,0.9999147111657937,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+1,sparse,iid,3,0,2.773655281716965,0.9999189713791655,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+1,sparse,lattice,3,0,2.9353860771847464,0.9999050383070689,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+2,matern52,iid,3,0,2.7649660289895652,0.9999243611225586,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+2,matern52,lattice,3,0,1.9038991749412524,0.9999169023575242,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+2,sparse,iid,3,0,3.4579177698441743,0.9999269921348514,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+2,sparse,lattice,3,0,2.0094985618975705,0.9999200451613849,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,

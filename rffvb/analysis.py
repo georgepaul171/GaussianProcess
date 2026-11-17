@@ -164,6 +164,19 @@ def claim3_exact():
     mix = df.groupby(["d", "truth", "design"]).agg(reps=("rep", "count"), mixed=("mixed", "sum"),
                                                    rhat_max=("rhat_model_size", "max"),
                                                    pip_gap_max=("max_pip_gap", "max")).reset_index()
+    # Full-posterior quantities need mixed chains (E1f rule). Fixed-support quantities only use the blocked
+    # fixed-support sampler, which mixes (results/fixed_support_mixing_check.txt), so they are kept for every replicate.
+    FIXED = ["vb_selected", "vif_median", "ratio_fixed_over_vif_median", "spearman_ratio_vif", "coef_cov_fixed_centred",
+             "coef_pred_vif", "fun_cov_fixed_centred", "fun_pred_vif", "fun_R_median",
+             "fun_var_ratio_exact_fixed_over_diag", "frac_post_corr_negative", "frac_opposite_sign_all",
+             "frac_opposite_sign_xcorr_gt_0p9", "median_post_corr_xcorr_gt_0p9", "n_pairs_xcorr_gt_0p9"]
+    fx = df[df.vif_median.notna()].groupby(["d", "truth", "design"]).agg(
+        n=("rep", "count"), **{c: (c, "mean") for c in FIXED if c in df}).reset_index()
+    fx["coef_part_fixed_vif"] = 0.95 - fx.coef_cov_fixed_centred
+    fx["fun_part_fixed_vif"] = 0.95 - fx.fun_cov_fixed_centred
+    fx = mix.merge(fx, on=["d", "truth", "design"], how="left")
+    fx.to_csv(os.path.join(ROOT, "results", "claim3_fixed_support_summary.csv"), index=False)
+    print(fx.to_string(index=False, float_format=lambda x: f"{x:.3g}"))
     k = df[df.mixed & df.coef_cov_obs.notna()]
     agg = {c: (c, "mean") for c in [
         "vb_selected", "vif_median", "ratio_fixed_over_vif_median", "spearman_ratio_vif", "ratio_full_over_q_median",
