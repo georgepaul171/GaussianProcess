@@ -32,6 +32,40 @@ def draw_band(theta_draws, Phit):
     return np.quantile(F, 0.025, axis=0), np.quantile(F, 0.975, axis=0)
 
 
+def claim3_metrics(Xs, sel, Phit, lo, hi, mean_vb, m_gp, s_gp):
+    """Claim 3 (2027-research results/claims.md) on the VB-selected support S (columns of the sigma-scaled design):
+    coefficient VIF_i = [(X_S'X_S)^-1]_ii (X_S'X_S)_ii and its predicted coverage 2 Phi(1.96/sqrt(VIF)) - 1;
+    the function-level analogue R(x) = phi_S' G_S^-1 phi_S / sum_j phi_j^2 / G_jj (fixed-support Gaussian over
+    mean-field variance of f(x)) and its predicted coverage; observed coverage of exact-GP posterior function values
+    P_{f ~ GP posterior}(f(x) in VB band), averaged over test points; and the width-only coverage (VB band
+    re-centred at the GP mean)."""
+    from scipy.stats import norm
+    out = dict(support_size=int(len(sel)))
+    pz = lambda r: 2 * norm.cdf(1.959964 / np.sqrt(r)) - 1
+    obs = norm.cdf((hi - m_gp) / s_gp) - norm.cdf((lo - m_gp) / s_gp)
+    half = 0.5 * (hi - lo)
+    out.update(cov_gp_observed=float(obs.mean()), cov_gp_width_only=float((2 * norm.cdf(half / s_gp) - 1).mean()),
+               mean_shift_over_gp_sd=float(np.median(np.abs(mean_vb - m_gp) / s_gp)))
+    if len(sel) == 0:
+        return out
+    XS = Xs[:, sel]
+    GS = XS.T @ XS
+    lam, U = np.linalg.eigh(GS)
+    sing = lam.min() <= 1e-12 * lam.max()
+    lam_c = np.maximum(lam, 1e-12 * lam.max())          # singular support: VIF effectively infinite (capped)
+    Gd = np.diag(GS)
+    vif = (U ** 2 / lam_c).sum(1) * Gd
+    PhS = Phit[:, sel] / C.SIGMA                       # same scaling as the design (f = Phi theta = (Phi/s)(s theta))
+    v_fix = ((PhS @ U) ** 2 / lam_c).sum(1)
+    v_mf = (PhS ** 2 / Gd).sum(1)
+    R = np.maximum(v_fix / v_mf, 1e-300)
+    out.update(support_singular=bool(sing), support_cond=float(lam.max() / max(lam.min(), 1e-300)),
+               vif_median=float(np.median(vif)), vif_max=float(vif.max()),
+               pred_cov_coef=float(pz(np.maximum(vif, 1.0)).mean()),
+               fun_vif_median=float(np.median(R)), pred_cov_fun=float(pz(R).mean()), frac_fun_vif_below_1=float(np.mean(R < 1)))
+    return out
+
+
 def draws_mf(rng, mu, sd, incl, sizes=None):
     """Mean-field spike-and-slab draws; with sizes, inclusion is shared within consecutive groups."""
     nd, p = C.N_DRAWS, len(mu)
@@ -55,6 +89,7 @@ def run_job(j):
         f"truth_{k}": v for k, v in D["info"].items() if k == "K"})
     rows = []
     mu, sd, info = exact_gp(X, y, Xt, seed=rep)
+    m_gp, s_gp = mu, sd
     rows.append(dict(base, design="-", method="exact_gp", p=0, n_selected=np.nan, runtime=info["t"],
                      gp_ell=info["ell"], gp_s2=info["s2"], gp_noise=info["noise"], **metrics(f_te, mu, *gauss_band(mu, sd))))
     ell, s2, nz = info["ell"], info["s2"], info["noise"]
@@ -89,17 +124,20 @@ def run_job(j):
             k = int((r.gamma > 0.5).sum())
             if design == "iid":
                 k_ind = k
-            rows.append(dict(bd, method="svb_individual", n_selected=k, runtime=t_feat + time.perf_counter() - t0,
-                             n_sweeps=r.n_sweeps, converged=r.converged, **metrics(f_te, mean, *band)))
+            rt = t_feat + time.perf_counter() - t0
+            c3 = claim3_metrics(Xs, np.flatnonzero(r.gamma > 0.5), Phit, *band, mean, m_gp, s_gp)
+            rows.append(dict(bd, method="svb_individual", n_selected=k, runtime=rt,
+                             n_sweeps=r.n_sweeps, converged=r.converged, **metrics(f_te, mean, *band), **c3))
             # group spike-and-slab VB, each cos/sin pair a group (GSVB-style, multivariate Laplace slab)
             t0 = time.perf_counter()
             sizes = np.full(p // 2, 2)
             g = run_gsvb(Xs, Ys, sizes, lam=C.VB_LAM, a0=C.VB_A0, b0=None, eps=C.VB_EPS, max_sweeps=C.VB_MAX_SWEEPS)
             mean = Phit @ g.post_mean
             band = draw_band(draws_mf(rng, g.mu, g.s, g.gamma, sizes), Phit)
-            rows.append(dict(bd, method="svb_group", n_selected=int(2 * (g.gamma > 0.5).sum()),
-                             runtime=t_feat + time.perf_counter() - t0, n_sweeps=g.n_sweeps, converged=g.converged,
-                             **metrics(f_te, mean, *band)))
+            rt = t_feat + time.perf_counter() - t0
+            c3 = claim3_metrics(Xs, np.flatnonzero(np.repeat(g.gamma > 0.5, sizes)), Phit, *band, mean, m_gp, s_gp)
+            rows.append(dict(bd, method="svb_group", n_selected=int(2 * (g.gamma > 0.5).sum()), runtime=rt,
+                             n_sweeps=g.n_sweeps, converged=g.converged, **metrics(f_te, mean, *band), **c3))
 
         # SSGP with as many features as individual VB selected (m = ceil(k/2) frequencies, >= 1)
         m_freq = max(1, math.ceil(k_ind / 2))
