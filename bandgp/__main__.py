@@ -2,6 +2,7 @@
 
   python -m bandgp run      [--slots 4] [--mem-per-slot-gb 3.5] [--filter key=val ...]
   python -m bandgp analyse  # results.csv, figures/, summary tables
+  python -m bandgp extra refs|metis|nnpred|plateau   # supplementary runs and diagnostics (after `run`)
   python -m bandgp job '<json>'   (internal: one job in this process)
 """
 import os
@@ -95,11 +96,19 @@ def main():
     r.add_argument("--mem-per-slot-gb", type=float, default=3.5); r.add_argument("--filter", nargs="*")
     jb = sp.add_parser("job"); jb.add_argument("spec"); jb.add_argument("--mem", type=int, default=0)
     sp.add_parser("analyse")
+    ex = sp.add_parser("extra"); ex.add_argument("what", choices=["refs", "metis", "nnpred", "plateau"])
+    ex.add_argument("--mem", type=int, default=0)
     a = ap.parse_args()
     if a.cmd == "run":
         run(a)
     elif a.cmd == "job":
         job(a)
+    elif a.cmd == "extra":
+        set_ftz_daz()
+        if a.mem:
+            resource.setrlimit(resource.RLIMIT_AS, (a.mem, a.mem))
+        from .extra import main as emain
+        emain(a.what)
     else:
         from .analysis import main as amain
         amain()

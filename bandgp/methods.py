@@ -227,7 +227,7 @@ def band_banded(ctx, res, c):
     res.flops = n * u ** 2 + 2 * n * u * (1 + C.N_VAR)
 
 
-def band_chol(ctx, res, c):
+def band_chol(ctx, res, c, order="default"):
     """d=2: sparse K*1{dist<=c ell} + s2 I via cKDTree.sparse_distance_matrix, CHOLMOD (supernodal, AMD/METIS)."""
     r = c * ctx.ell
     if ctx.nnz_row(r) * ctx.n > C.NNZ_CAP:
@@ -239,10 +239,11 @@ def band_chol(ctx, res, c):
         A = (K + sparse.identity(ctx.n, format="csr") * ctx.s2).tocsc()
         del K
         try:
-            F = cholmod.cho_factor(A, lower=True)
+            F = cholmod.cho_factor(A, lower=True, order=order)
         except cholmod.CholmodNotPositiveDefiniteError as e:
             raise Invalid(f"cholmod: {e}")
         del A
+        res.info["order"] = str(F.order)
         a = F.solve(ctx.y)
     with res.timer("mean"):
         res.mt, res.mv = xt.rmatvec(a), xv.rmatvec(a)
@@ -397,18 +398,21 @@ def approx_maxmin(X, L, rng):
 
 
 def _cond(ctx, Xi, XN, nugget):
-    """b = (K_NN + nugget I)^{-1} k_N(x_i) and conditional variance, batched over rows."""
+    """b = (K_NN + nugget I)^{-1} k_N(x_i) and conditional variance, batched over rows.
+    If _STATE['conds'] is a list, condition numbers of up to 50 conditioning matrices per batch are appended."""
     mm = XN.shape[1]
     diff = XN[:, :, None, :] - XN[:, None, :, :]
     KNN = kfun_sq(ctx.kernel, np.sum(diff * diff, -1), ctx.ell)
     KNN[:, np.arange(mm), np.arange(mm)] += nugget
+    if _STATE.get("conds") is not None and len(KNN) > 0:
+        _STATE["conds"].extend(np.linalg.cond(KNN[:: max(1, len(KNN) // 50)]).tolist())
     kN = kfun_sq(ctx.kernel, np.sum((XN - Xi[:, None, :]) ** 2, -1), ctx.ell)
     b = np.linalg.solve(KNN, kN[..., None])[..., 0]
     dv = 1 + nugget - np.einsum("ij,ij->i", kN, b)
     return b, kN, dv
 
 
-def vecchia_latent(ctx, res, m):
+def vecchia_latent(ctx, res, m, nugget=1e-6):
     """Latent-field Vecchia, prediction points ordered last (Katzfuss, Guinness, Gong & Zilber 2020): approximate
     maxmin ordering of training inputs, then test, then validation points; each point conditions on its m nearest
     predecessors (searched in a prefix holding >= 2/3 of them). Posterior precision A^T A + diag(1/s2 on observed)
@@ -417,7 +421,7 @@ def vecchia_latent(ctx, res, m):
     N = n + nt + nv
     if N * m * m > C.NNZ_CAP:
         raise Skip("nnz(A^T A) cap")
-    nug = 1e-6
+    nug = nugget
     with res.timer("fit"):
         order = approx_maxmin(ctx.X, ctx.L, np.random.default_rng(12345))
         Z = np.vstack([ctx.X[order], ctx.Xt, ctx.Xv])

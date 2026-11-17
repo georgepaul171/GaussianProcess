@@ -53,6 +53,70 @@ def band_radii(j):
     return C.CS[i:i + 2]
 
 
+def add_metrics(rows, preds, ft, fv, sub, ref=None):
+    """Per-row accuracy metrics vs f0 (and vs exact when present in preds or given as ref)."""
+    ref = ref if ref is not None else preds.get("exact")
+    for row in rows:
+        r = preds.get(row["method"])
+        if r is None:
+            continue
+        row["rmse_f0"] = float(np.sqrt(np.mean((r.mt - ft) ** 2)))
+        row["rmse_val"] = float(np.sqrt(np.mean((r.mv - fv) ** 2)))
+        v = r.vsub; fs = ft[sub]; ms = r.mt[sub]
+        row["frac_negvar"] = float(np.mean(v < 0))
+        row["cover"] = float(np.mean(np.abs(fs - ms) <= 1.96 * np.sqrt(np.clip(v, 0, None))))
+        if ref is not None:
+            row["rmse_to_exact"] = float(np.sqrt(np.mean((r.mt - ref.mt) ** 2)))
+            row["var_ratio"] = float(np.mean(v / ref.vsub)); row["var_ratio_min"] = float(np.min(v / ref.vsub))
+        if row["frac_negvar"] > 0:
+            row["status"] = "invalid"; row["reason"] = "negative predictive variances"
+
+
+def run_methods(ctx, mlist, base, cap, crashed=(), pf=None):
+    """Run each (family, name, params, fn, kwargs) with the time cap, peak-memory sampling and status capture."""
+    rows, preds = [], {}
+    for family, name, params, fn, kw in mlist:
+        row = dict(base, family=family, method=name, **params)
+        if name in crashed:
+            row.update(status="oom", reason="process killed (memory) during this method"); rows.append(row); continue
+        if pf:
+            pf.write(f"start {name}\n"); pf.flush()
+        res = Result()
+        _STATE.update(deadline=(time.perf_counter() + cap) if cap else None, cap=cap)
+        pm = None
+        try:
+            with PeakRSS() as pm:
+                fn(ctx, res, **kw)
+            status, reason = "ok", ""
+        except Skip as e:
+            status, reason = "infeasible", str(e)
+        except Invalid as e:
+            status, reason = "invalid", str(e)
+        except Timeout as e:
+            status, reason = "timeout", str(e)
+        except MemoryError:
+            status, reason = "oom", "MemoryError"
+        except Exception as e:
+            nm = type(e).__name__
+            status = "oom" if "memory" in (nm + str(e)).lower() else "error"
+            reason = f"{nm}: {e}"[:300]
+            if status == "error":
+                traceback.print_exc()
+        _STATE.update(deadline=None)
+        if pf:
+            pf.write(f"done {name}\n"); pf.flush()
+        row.update(status=status, reason=reason, **{f"info_{k}": v for k, v in res.info.items()})
+        if status == "ok":
+            t_fit = res.t["fit"] + (ctx.t_tree if family != "exact" else 0.0)
+            t_mean = res.t["mean"] + (ctx.t_xcov if family in USES_XCOV else 0.0)
+            row.update(t_xcov=ctx.t_xcov if family in USES_XCOV else 0.0, t_fit=t_fit, t_mean=t_mean,
+                       t_var=res.t["var"], t_total=t_fit + t_mean + res.t["var"],
+                       flops=res.flops, nnz_used=res.info.get("nnz_used"), peak_mem_mb=pm.mb)
+            preds[name] = res
+        rows.append(row)
+    return rows, preds
+
+
 def run_job(j):
     os.makedirs(RAW, exist_ok=True)
     jid = job_id(j)
@@ -78,62 +142,12 @@ def run_job(j):
                 t_data=t_data, time_cap=cap)
     radii = band_radii(j)
 
-    rows, preds = [], {}
     ref_fn = band_banded if d == 1 else band_chol
     mlist = method_list(d, radii) + [("ref", f"ref_band_c{REF_C:g}", {"c": REF_C}, ref_fn, {"c": REF_C})]
-    for family, name, params, fn, kw in mlist:
-        row = dict(base, family=family, method=name, **params)
-        if name in crashed:
-            row.update(status="oom", reason="process killed (memory) during this method"); rows.append(row); continue
-        pf.write(f"start {name}\n"); pf.flush()
-        res = Result()
-        _STATE.update(deadline=time.perf_counter() + cap, cap=cap)
-        pm = None
-        try:
-            with PeakRSS() as pm:
-                fn(ctx, res, **kw)
-            status, reason = "ok", ""
-        except Skip as e:
-            status, reason = "infeasible", str(e)
-        except Invalid as e:
-            status, reason = "invalid", str(e)
-        except Timeout as e:
-            status, reason = "timeout", str(e)
-        except MemoryError:
-            status, reason = "oom", "MemoryError"
-        except Exception as e:
-            nm = type(e).__name__
-            status = "oom" if "memory" in (nm + str(e)).lower() else "error"
-            reason = f"{nm}: {e}"[:300]
-            if status == "error":
-                traceback.print_exc()
-        _STATE.update(deadline=None)
-        pf.write(f"done {name}\n"); pf.flush()
-        row.update(status=status, reason=reason, **{f"info_{k}": v for k, v in res.info.items()})
-        if status == "ok":
-            t_fit = res.t["fit"] + (ctx.t_tree if family != "exact" else 0.0)
-            t_mean = res.t["mean"] + (ctx.t_xcov if family in USES_XCOV else 0.0)
-            row.update(t_xcov=ctx.t_xcov if family in USES_XCOV else 0.0, t_fit=t_fit, t_mean=t_mean, t_var=res.t["var"], t_total=t_fit + t_mean + res.t["var"],
-                       flops=res.flops, nnz_used=res.info.get("nnz_used"), peak_mem_mb=pm.mb)
-            preds[name] = res
-        rows.append(row)
+    rows, preds = run_methods(ctx, mlist, base, cap, crashed, pf)
 
     ft, fv = data["ft"], data["fv"]
-    ref = preds.get("exact")
-    for row in rows:
-        r = preds.get(row["method"])
-        if r is None:
-            continue
-        row["rmse_f0"] = float(np.sqrt(np.mean((r.mt - ft) ** 2)))
-        row["rmse_val"] = float(np.sqrt(np.mean((r.mv - fv) ** 2)))
-        v = r.vsub; fs = ft[ctx.sub]; ms = r.mt[ctx.sub]
-        row["frac_negvar"] = float(np.mean(v < 0))
-        row["cover"] = float(np.mean(np.abs(fs - ms) <= 1.96 * np.sqrt(np.clip(v, 0, None))))
-        if ref is not None:
-            row["rmse_to_exact"] = float(np.sqrt(np.mean((r.mt - ref.mt) ** 2)))
-            row["var_ratio"] = float(np.mean(v / ref.vsub)); row["var_ratio_min"] = float(np.min(v / ref.vsub))
-        if row["frac_negvar"] > 0:
-            row["status"] = "invalid"; row["reason"] = "negative predictive variances"
+    add_metrics(rows, preds, ft, fv, ctx.sub)
     os.makedirs(PREDS, exist_ok=True)
     names = sorted(preds)
     np.savez_compressed(os.path.join(PREDS, jid + ".npz"), names=np.array(names),

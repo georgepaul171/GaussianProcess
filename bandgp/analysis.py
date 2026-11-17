@@ -84,7 +84,8 @@ def ref_check(df):
                                ).assign(rel_to_stat_err=lambda x: x.err_mean_vs_exact / x.rel_to_stat_err).reset_index()
 
 
-def config_table(df):
+def config_table(df, tol_mean=None):
+    tol_mean = TOL_MEAN if tol_mean is None else tol_mean
     nrep = df.groupby(KEYS)["rep"].nunique().rename("nrep")
     ok = df[(df.status == "ok") & (df.family != "ref")]
     agg = ok.groupby(KEYS + ["family", "method"]).agg(
@@ -96,7 +97,7 @@ def config_table(df):
         ref_name=("ref_name", "first")).reset_index().join(nrep, on=KEYS)
     agg["all_reps"] = agg.reps_ok == agg.nrep
     agg["rel_err"] = agg.err_ref_v / agg.ref_rmse_f0_v
-    agg["eligible"] = agg.all_reps & (agg.rel_err <= TOL_MEAN) & ((agg.var_ratio - 1).abs() <= TOL_VAR)
+    agg["eligible"] = agg.all_reps & (agg.rel_err <= tol_mean) & ((agg.var_ratio - 1).abs() <= TOL_VAR)
     best = agg[agg.all_reps].groupby(KEYS)["rmse_val"].min().rename("best_rmse_val")
     agg = agg.join(best, on=KEYS)
     agg["eligible_f0rule"] = agg.all_reps & (agg.rmse_val <= 1.05 * agg.best_rmse_val)
@@ -104,7 +105,7 @@ def config_table(df):
 
 
 def band_threshold(df):
-    b = df[(df.family == "band") & (df.rep == 0)]
+    b = df[(df.family == "band") & (df.rep == 0) & ~df.method.str.contains("_metis")]
     out = []
     for key, g in b.groupby(KEYS):
         okc = sorted(g[g.status == "ok"].c)
@@ -264,6 +265,64 @@ def fig_matched(sel):
     return p
 
 
+def fig_frontiers(agg):
+    """Primary evidence: error to the reference posterior vs approximate flops, every configuration, per cell."""
+    plt = _style()
+    from matplotlib.lines import Line2D
+    paths = []
+    for d in sorted(agg.d.unique()):
+        gd = agg[agg.d == d]
+        ns = sorted(gd.n.unique()); rows = [(k, b) for k in C.KERNELS for b in C.BETAS]
+        fig, axes = plt.subplots(len(rows), len(ns), figsize=(3.0 * len(ns), 2.15 * len(rows)), squeeze=False)
+        for i, (kern, beta) in enumerate(rows):
+            for jn, n in enumerate(ns):
+                ax = axes[i, jn]
+                g = gd[(gd.kernel == kern) & (gd.beta == beta) & (gd.n == n) & gd.rel_err.notna()]
+                for fam, (col, mk, lab) in FAMILY_STYLE.items():
+                    if fam == "exact":
+                        continue
+                    gf = g[g.family == fam].sort_values("flops")
+                    if gf.empty:
+                        continue
+                    ax.plot(gf.flops, np.maximum(gf.rel_err, 1e-7), color=col, lw=1.5, marker=mk, ms=5,
+                            markeredgecolor="white", markeredgewidth=0.6, zorder=3)
+                    bad = gf[(gf.var_ratio - 1).abs() > TOL_VAR]
+                    ax.plot(bad.flops, np.maximum(bad.rel_err, 1e-7), ls="none", marker="x", ms=4, color="#333", zorder=4)
+                if g.empty:
+                    ax.text(0.5, 0.5, "no reference posterior", ha="center", va="center", transform=ax.transAxes,
+                            fontsize=7, color="#666"); ax.set_xticks([]); ax.set_yticks([])
+                else:
+                    for t, ls in ((0.03, ":"), (0.05, "--"), (0.10, ":")):
+                        ax.axhline(t, color="#999", lw=0.7, ls=ls)
+                    ax.set_xscale("log"); ax.set_yscale("log"); ax.set_ylim(1e-7, 30)
+                ax.set_title(f"{'SE' if kern == 'se' else 'M3/2'} β={beta:g} n={n:.0e}", fontsize=8)
+        h = [Line2D([], [], color=c, marker=m, lw=1.5, ms=5, markeredgecolor="white")
+             for f, (c, m, _) in FAMILY_STYLE.items() if f != "exact"]
+        l = [lab for f, (_, _, lab) in FAMILY_STYLE.items() if f != "exact"]
+        h.append(Line2D([], [], ls="none", marker="x", color="#333")); l.append("variance ratio off by >10%")
+        fig.legend(h, l, loc="lower center", ncol=3, frameon=False, fontsize=8)
+        fig.supxlabel("approximate flops (fit + mean + 200 variances)", y=0.035, fontsize=9)
+        fig.supylabel("‖mean − reference mean‖ / statistical error (lines: 3%, 5%, 10%)", fontsize=9)
+        fig.suptitle(f"d = {d}: error–cost frontiers per method family (each marker = one configuration)", fontsize=10)
+        fig.tight_layout(rect=(0.01, 0.06, 1, 0.975))
+        p = os.path.join(ROOT, "figures", f"frontiers_d{d}.png"); fig.savefig(p, dpi=150); plt.close(fig); paths.append(p)
+    return paths
+
+
+def threshold_sensitivity(df):
+    out = []
+    ws = {t: winners(config_table(df, t), df) for t in (0.03, 0.05, 0.10)}
+    base = ws[0.05].set_index(KEYS)
+    for t in (0.03, 0.10):
+        w = ws[t].set_index(KEYS)
+        for k in base.index:
+            a, b = base.loc[k, "winner_time"], w.loc[k, "winner_time"]
+            fam = lambda s: s.rsplit("_", 1)[0] if s.startswith(("band", "sgpr", "vecchia", "pcg")) else s
+            if a != b:
+                out.append(dict(zip(KEYS, k), tol=t, winner_at_5pct=a, winner=b, family_flip=fam(a) != fam(b)))
+    return pd.DataFrame(out)
+
+
 def main():
     os.makedirs(os.path.join(ROOT, "figures"), exist_ok=True)
     df = load()
@@ -278,7 +337,9 @@ def main():
     verdict.to_csv(os.path.join(ROOT, "results", "band_vs_vecchia_verdict.csv"), index=False)
     with open(os.path.join(ROOT, "results", "winners.md"), "w") as fh:
         fh.write(md_winners(w, th) + "\n")
-    figs = fig_winners(agg) + [fig_matched(sel)]
+    figs = fig_winners(agg) + [fig_matched(sel)] + fig_frontiers(agg)
+    ts = threshold_sensitivity(df); ts.to_csv(os.path.join(ROOT, "results", "threshold_sensitivity.csv"), index=False)
+    print("\nthreshold sensitivity (winner by wall-clock differs from the 5% rule):\n", ts.to_string())
     pd.set_option("display.width", 250); pd.set_option("display.max_colwidth", 200); pd.set_option("display.max_rows", 500)
     print("REFERENCE CHECK (band c=5 vs exact, n=1e4):\n", rc.to_string())
     print(md_winners(w, th))
