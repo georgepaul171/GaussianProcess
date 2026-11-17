@@ -107,6 +107,53 @@ def fig_coverage(s):
     return p
 
 
+def claim3(df):
+    """Predicted (fixed-support VIF) vs observed coverage of exact-GP function values, per VB fit, aggregated.
+    Undercoverage U = 0.95 - observed is split as
+      VIF part (coefficient)  0.95 - pred_cov_coef   (Claim 3 as stated: per-coefficient deflation)
+      VIF part (function)     0.95 - pred_cov_fun    (same deflation for f(x) = phi_S' theta_S)
+      width part              0.95 - width_only      (VB band width vs GP sd, incl. inclusion variance)
+      remainder               width_only - observed  (VB mean offset from the GP mean)."""
+    v = df[df.method.isin(["svb_individual", "svb_group"]) & (df.status == "ok")]
+    g = v.groupby(["truth", "d", "design", "method", "p"]).agg(
+        reps=("rep", "nunique"), support=("support_size", "mean"),
+        cov_f0=("coverage", "mean"), cov_gp_observed=("cov_gp_observed", "mean"),
+        cov_gp_width_only=("cov_gp_width_only", "mean"), pred_cov_coef=("pred_cov_coef", "mean"),
+        pred_cov_fun=("pred_cov_fun", "mean"), vif_median=("vif_median", "median"),
+        fun_vif_median=("fun_vif_median", "median"), frac_R_below_1=("frac_fun_vif_below_1", "mean"),
+        singular_support=("support_singular", "mean"), mean_shift_sd=("mean_shift_over_gp_sd", "median")).reset_index()
+    U = 0.95 - g.cov_gp_observed
+    g["undercov"] = U
+    g["share_vif_coef"] = (0.95 - g.pred_cov_coef) / U
+    g["share_vif_fun"] = (0.95 - g.pred_cov_fun) / U
+    g["share_width"] = (0.95 - g.cov_gp_width_only) / U
+    g["share_mean_offset"] = (g.cov_gp_width_only - g.cov_gp_observed) / U
+    return g
+
+
+def fig_claim3(c3):
+    plt = _plt()
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.2), sharey=True)
+    for ax, (col, lab) in zip(axes, [("pred_cov_coef", "coefficient-level VIF prediction"),
+                                     ("pred_cov_fun", "function-level fixed-support prediction")]):
+        for (m, des), gg in c3.groupby(["method", "design"]):
+            c, mk, _ = STYLE[(m, des)]
+            for t, fill in (("sparse", c), ("matern52", "none")):
+                h = gg[gg.truth == t]
+                ax.scatter(h[col], h.cov_gp_observed, marker=mk, s=40, facecolors=fill, edgecolors=c, linewidths=1.2,
+                           label=f"{STYLE[(m, des)][2]}, {'sparse' if t == 'sparse' else 'Matérn'}")
+        ax.plot([0, 1], [0, 1], color="#999", lw=0.8, ls="--")
+        ax.set_xlim(0, 1.0); ax.set_ylim(0, 1.0)
+        ax.set_xlabel(f"predicted coverage ({lab})")
+        ax.set_title(lab, fontsize=9)
+    axes[0].set_ylabel("observed coverage of exact-GP function values")
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=4, frameon=False, fontsize=7)
+    fig.tight_layout(rect=(0, 0.17, 1, 1))
+    p = os.path.join(ROOT, "figures", "claim3_predicted_vs_observed.png"); fig.savefig(p, dpi=160); plt.close(fig)
+    return p
+
+
 def main():
     os.makedirs(os.path.join(ROOT, "figures"), exist_ok=True)
     df = load()
@@ -118,3 +165,7 @@ def main():
             "runtime", "converged", "max_abs_corr", "median_col_max_corr", "min_freq_gap"]
     print(s[cols].to_string(index=False, float_format=lambda x: f"{x:.3g}"))
     print(fig_rmse_vs_selected(s), fig_coverage(s))
+    c3 = claim3(df)
+    c3.to_csv(os.path.join(ROOT, "results", "claim3.csv"), index=False)
+    print(c3.to_string(index=False, float_format=lambda x: f"{x:.3g}"))
+    print(fig_claim3(c3))
