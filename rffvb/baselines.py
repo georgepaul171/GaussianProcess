@@ -82,16 +82,22 @@ def _ssgp_nlml(theta, X, y, m):
     return nlml, np.concatenate([gW.ravel(), [g_ls2, g_lnz]])
 
 
-def ssgp(X, y, Xt, m, ell0, s2_0, noise0, seed=0, maxiter=500):
+def ssgp(X, y, Xt, m, ell0, s2_0, noise0, seed=0, maxiter=500, restarts=10):
     """Lazaro-Gredilla et al. (2010): m frequencies (2m features) optimised jointly with s2 and noise by marginal
-    likelihood (L-BFGS, analytic gradients); frequencies initialised from the SE spectral density at the exact-GP
-    lengthscale."""
+    likelihood (L-BFGS, analytic gradients). The objective is highly multimodal in the frequencies, so as in the
+    original paper we use several random initialisations (frequencies from the SE spectral density at the exact-GP
+    lengthscale; s2 and noise at their exact-GP values) and keep the best marginal likelihood."""
     t0 = time.perf_counter()
     n, d = X.shape
     rng = np.random.default_rng(seed)
-    W0 = rng.standard_normal((m, d)) / ell0
-    th0 = np.concatenate([W0.ravel(), [np.log(s2_0), np.log(noise0)]])
-    res = minimize(_ssgp_nlml, th0, args=(X, y, m), jac=True, method="L-BFGS-B", options=dict(maxiter=maxiter))
+    best = None
+    for _ in range(restarts):
+        W0 = rng.standard_normal((m, d)) / ell0
+        th0 = np.concatenate([W0.ravel(), [np.log(s2_0), np.log(noise0)]])
+        r = minimize(_ssgp_nlml, th0, args=(X, y, m), jac=True, method="L-BFGS-B", options=dict(maxiter=maxiter))
+        if best is None or r.fun < best.fun:
+            best = r
+    res = best
     th = res.x
     W = th[:m * d].reshape(m, d); s2, nz = np.exp(th[m * d:])
     mu, sd = blr_posterior(rff(X, W), y, s2 / m, nz, rff(Xt, W))
