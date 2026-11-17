@@ -96,7 +96,7 @@ def main():
     r.add_argument("--mem-per-slot-gb", type=float, default=3.5); r.add_argument("--filter", nargs="*")
     jb = sp.add_parser("job"); jb.add_argument("spec"); jb.add_argument("--mem", type=int, default=0)
     sp.add_parser("analyse")
-    ex = sp.add_parser("extra"); ex.add_argument("what", choices=["refs", "metis", "nnpred", "plateau", "latent"])
+    ex = sp.add_parser("extra"); ex.add_argument("what", choices=["refs", "metis", "nnpred", "plateau", "latent", "latent_big"])
     ex.add_argument("--part", default=None)
     ex.add_argument("--mem", type=int, default=0)
     a = ap.parse_args()

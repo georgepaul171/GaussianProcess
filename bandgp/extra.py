@@ -105,6 +105,17 @@ def do_latent(part):
                                     for m in C.VECCHIA_MS], cap=C.time_cap(n))
 
 
+def do_latent_big():
+    """Is latent Vecchia m=30 at n=1e6 (d=1, beta=1) method- or implementation-limited? Run it with the predicted
+    nnz cap disabled and a 12 GB address-space limit; log actual nnz(L), peak memory, flops, time."""
+    from .methods import vecchia_latent as vl
+    C.NNZ_CAP = 1e12
+    for k in C.KERNELS:
+        for r in range(C.reps(1_000_000)):
+            supplement(dict(d=1, kernel=k, beta=1.0, n=1_000_000, rep=r),
+                       [("vecchia_latent", "vecchia_latent_m30", {"m": 30}, vl, {"m": 30})], cap=600)
+
+
 def do_plateau():
     C.NNZ_CAP = 1e9
     out = []
@@ -130,7 +141,8 @@ def do_plateau():
                        cond_median=float(np.median(conds)) if conds.size else np.nan,
                        cond_max=float(np.max(conds)) if conds.size else np.nan)
             if st == "ok":
-                row.update(err_rel=float(np.sqrt(np.mean((res.mt - mt0) ** 2))) / stat,
+                row.update(flops=float(res.flops), nnz_used=res.info.get("nnz_used"),
+                           err_rel=float(np.sqrt(np.mean((res.mt - mt0) ** 2))) / stat,
                            var_ratio=float(np.mean(res.vsub / v0)),
                            var_ratio_min=float(np.min(res.vsub / v0)), var_ratio_max=float(np.max(res.vsub / v0)))
             out.append(row)
@@ -142,4 +154,6 @@ def do_plateau():
 def main(what, part=None):
     if what == "latent":
         return do_latent(part)
+    if what == "latent_big":
+        return do_latent_big()
     {"refs": do_refs, "metis": do_metis, "nnpred": do_nnpred, "plateau": do_plateau}[what]()
