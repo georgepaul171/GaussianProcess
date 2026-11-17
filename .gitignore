@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 bandgp/_ftz/*.so
 results/preds/
+results.csv
+figures/
+results/*.csv
+results/*.md
