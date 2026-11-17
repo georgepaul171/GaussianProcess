@@ -10,10 +10,12 @@ import psutil
 
 from . import config as C
 from .data import make_data
-from .methods import Ctx, Result, Skip, Invalid, Timeout, method_list, _STATE
+from .methods import Ctx, Result, Skip, Invalid, Timeout, method_list, _STATE, band_banded, band_chol
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW = os.path.join(ROOT, "results", "raw")
+PREDS = os.path.join(ROOT, "results", "preds")
+REF_C = 5.0   # reference posterior where exact is unavailable: hard banding at c = 5 (validated vs exact at n = 1e4)
 USES_XCOV = {"exact", "band", "pcg"}
 
 
@@ -77,7 +79,9 @@ def run_job(j):
     radii = band_radii(j)
 
     rows, preds = [], {}
-    for family, name, params, fn, kw in method_list(d, radii):
+    ref_fn = band_banded if d == 1 else band_chol
+    mlist = method_list(d, radii) + [("ref", f"ref_band_c{REF_C:g}", {"c": REF_C}, ref_fn, {"c": REF_C})]
+    for family, name, params, fn, kw in mlist:
         row = dict(base, family=family, method=name, **params)
         if name in crashed:
             row.update(status="oom", reason="process killed (memory) during this method"); rows.append(row); continue
@@ -130,6 +134,11 @@ def run_job(j):
             row["var_ratio"] = float(np.mean(v / ref.vsub)); row["var_ratio_min"] = float(np.min(v / ref.vsub))
         if row["frac_negvar"] > 0:
             row["status"] = "invalid"; row["reason"] = "negative predictive variances"
+    os.makedirs(PREDS, exist_ok=True)
+    names = sorted(preds)
+    np.savez_compressed(os.path.join(PREDS, jid + ".npz"), names=np.array(names),
+                        mt=np.array([preds[k].mt for k in names]), mv=np.array([preds[k].mv for k in names]), vsub=np.array([preds[k].vsub for k in names]),
+                        ft=ft, fv=fv, sub=ctx.sub)
     tmp = out_path + ".tmp"
     with open(tmp, "w") as fh:
         for row in rows:
